@@ -5,12 +5,167 @@ const requireAuthenticationWrapper = Symbol('Require Auth Wrapper')
 const wrapWithExpressNext = Symbol('Wrap async handlers with express next()')
 
 const defaultOptions = {
-  blacklistedEnv: {},
   requireAuthentication: false,
-  wildcard: false,
-  skippedHandler: null,
-  cors: null
+  blacklistedEnv: {},
+  wildcard: false
 }
+
+const optionHandlers = {
+  requireAuthentication: handler => {
+    const skippedHandler = this.skippedHandler
+
+    return (req, res, next) => {
+      if (!req.isAuthenticated()) {
+        if (typeof skippedHandler === 'function') {
+          return this[wrapWithExpressNext](skippedHandler)(req, res, next)
+        }
+        return next()
+      }
+
+      if (!req.user) {
+        return next(new PermissionsError('No req.user available'))
+      }
+
+      this[wrapWithExpressNext](handler)(req, res, next)
+    }
+  },
+
+  blacklistedEnv: 
+
+  wildcard: 
+
+  skippedHandler: handler => {
+
+  }
+
+  cors: 
+
+
+}
+
+/*
+  You can use .withOptions to add additional options to all Route instances
+  or to override existing options
+
+  The functions receive two args; (userArg, { onHandler, onRoute })
+
+  userArg         -->  option value given by the user
+
+  onHandler       -->  called before adding each route handler into the express stack
+                     
+                        example
+                        -------
+                         
+                        onHandler(({ handler }) => {
+                          const newHandler = (req, res, next) => {
+                            if (req.params.id === 23) {
+                              return next(new Error(`Mike, you've been banned`))
+                            }
+                            handler(req, res, next)
+                          }
+
+                          return { handler: newHandler }
+                        })
+
+  beforeHanlder   -->   same as onHandler, but called first
+
+  onRoute         -->  called before pushing the stack into the express stack
+
+                        example
+                        -------
+
+                        onRoute(({ path, stack, router }) => {
+                          // path is express route path
+                          // stack is a function of handlers
+                          // router is the express router instance
+
+                          stack.push((req, res) => {
+                            res.send('not found')
+                          })
+
+                          return { stack }
+                        })
+
+  beforeRoute     -->  same as onRoute, but runs before
+*/
+Route.withOptions({
+  requireAuthentication: (shouldEnforce, { onHandler }) => {
+    if (shouldEnforce !== true) {
+      return
+    }
+
+    onHandler(({ handler }) => {
+      return {
+        handler: (req, res, next) => {
+          if (!req.isAuthenticated() || !req.user) {
+            return next()
+          }
+          handler(req, res, next)
+        }
+      }
+    })
+  },
+
+  skippedHandler: (customHandler, { onRoute }) => {
+    onRoute(({ stack }) => {
+      stack.push(customHandler)
+      return { stack }
+    })
+  },
+
+  blacklistedEnv: (list, { onRoute }) => {
+    let suppress = false
+
+    for (const key in list) {
+      const envVar = process.env[key]
+      const blacklisted = list[key]
+
+      if (!envVar) {
+        continue
+      }
+
+      if (Array.isArray(blacklisted)) {
+        if (blacklisted.includes(envVar)) {
+          suppress = true
+          break
+        }
+      } else if (envVar === blacklisted) {
+        suppress = true
+        break
+      }
+    }
+
+    if (!suppress) {
+      return
+    }
+
+    // if suppressing, then wipe the whole stack
+    onRoute(() => { stack: [] })
+  },
+
+  wildcard: (shouldEnforce, { beforeRoute }) => {
+    if (!shouldEnforce) {
+      return
+    }
+
+    onRoute(({ path }) => {
+      path: path.replace(/\/$/, '') + '*'
+    })
+  },
+
+  cors: (corsArgs, { onRoute }) => {
+    onRoute(({ path, stack, router }) => {
+      // see https://github.com/expressjs/cors#enabling-cors-pre-flight
+      router.options(path, cors(this.cors))
+      stack.unshift(cors(corsArgs))
+
+      return {
+        stack,
+        router
+      }
+    })
+  }
+})
 
 class Route extends Array {
   constructor(options = {}) {
